@@ -1,0 +1,13 @@
+{
+  "name": "jakubsob-skills",
+  "description": "Jakub Sobolewski's agent skills for testing",
+  "version": "1.0.0",
+  "author": {
+    "name": "Jakub Sobolewski",
+    "email": "jakubsob@gmail.com"
+  },
+  "homepage": "https://github.com/jakubsob/skills",
+  "repository": "https://github.com/jakubsob/skills",
+  "license": "MIT",
+  "skills": ["./skills/testing"]
+}

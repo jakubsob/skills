@@ -1,0 +1,11 @@
+{
+  "$schema": "https://www.skills.sh/schema/skills.sh.json",
+  "notGrouped": "bottom",
+  "groupings": [
+    {
+      "title": "Testing",
+      "description": "Writing, reviewing, and running tests across frameworks.",
+      "skills": ["testing"]
+    }
+  ]
+}
