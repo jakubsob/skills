@@ -1,28 +1,27 @@
 # Playwright acceptance testing conventions
 
-Patterns for end-to-end acceptance tests that double as readable specs: domain vocabulary in the test file, a DSL that translates intent into browser actions, and a Driver that knows how to execute it. Works with or without an existing test suite.
+Patterns for acceptance tests that double as readable specs: domain vocabulary in the test file, a DSL that translates intent into browser actions, and a Driver that knows how to execute it. Works whether you're starting fresh or refactoring an existing Playwright suite.
 
 ## The core idea
 
-Acceptance tests have two jobs: prove a feature works, and document what it should do. The DSL pattern keeps these in the same file. A spec describes behaviour in domain language; a Driver knows how to perform that behaviour against the real UI. You write the same test regardless of whether you drive through a browser or through an API. Only the Driver changes.
+Acceptance tests have two jobs: prove a feature works, and document what it should do. This pattern keeps both in the same file. A spec describes behaviour in domain language (`given` / `when` / `then`); a `Driver` knows how to perform that behaviour by driving the real UI with Playwright. The spec never mentions pages, buttons, or selectors — so it reads as a description of the product, and a UI refactor changes the Driver, not the spec.
 
 ```text
-spec (.spec.ts)
-  └─ TestDSL          ← speaks the domain (given / when / then)
-       └─ Driver       ← interface (abstract contract)
-            ├─ DriverUI    ← Playwright + optional API mock
-            └─ DriverAPI   ← HTTP client (for integration runs)
+spec (.spec.ts)          ← reads as product behaviour; no Playwright
+  └─ TestDSL             ← domain verbs: given_ / when_ / then_
+       └─ Driver         ← the contract; the only layer that touches Playwright
 ```
 
-This separation means:
+Two things are deliberately separate:
 
-- Specs are stable; only the Driver changes when the UI changes.
-- The same spec can run in fast isolated mode (mocked backend) or against a real server.
-- New contributors read one spec and understand the feature; they don't need to know Playwright.
+- **How the app is exercised** — always through the Driver. The basic implementation is `DriverUI` for driving it via browser, but you could implement other drivers if the system exposes different interfaces (e.g. API, CLI or mobile).
+- **How test state is set up** — the one axis that varies. Either mock the backend with MSW and seed an in-memory store, or point at a real backend and seed it over its API. The specs and the DSL are byte-for-byte identical either way; only the `given_` implementation differs.
+
+That second point is the payoff: you can start against a mocked backend for speed, and later run the same specs against a real server for fidelity, without touching a single scenario.
 
 ## Writing a spec
 
-Each test is a user story in past-tense, third-person prose: the test name says what happened, not what the code does. Use `given_`, `when_`, `then_` prefixes in the DSL to make setup, action, and assertion visually distinct.
+Each test is a user story in plain, past-or-present-tense business language. The title says what the product does, not what the code does — and never names a page, button, row, or dialog.
 
 ```typescript
 // tests/specs/project-management.spec.ts
@@ -36,244 +35,292 @@ test.beforeEach(async ({ createDSL }) => {
   dsl = createDSL();
 });
 
-test("Scenario: Admin creates a project", async () => {
+test("an admin creates a project and it appears in the portfolio", async () => {
   await dsl.given_admin_user();
 
   await dsl.when_user_creates_project({ name: "Alpha" });
 
-  await dsl.then_project_is_visible("Alpha");
+  await dsl.then_project_is_present("Alpha");
 });
 
-test("Scenario: Respondent cannot delete a project", async () => {
+test("a respondent cannot delete a project", { tag: "@user-respondent" }, async () => {
   await dsl.given_respondent_user();
   await dsl.given([project({ name: "Alpha" })]);
 
   await dsl.when_user_opens_project("Alpha");
 
-  await dsl.then_delete_action_is_not_available();
+  await dsl.then_project_deletion_is_not_available();
 });
 ```
 
-- One scenario per `test()`. The name starts with "Scenario:" and reads as prose.
-- `given_*` is a pre-condition. Seed state the test needs. Never use a `when_` step to set up state.
-- `when_*` is the action under test. Prefer a single `when_` per scenario.
-- `then_*` is the observable outcome. Assert exactly what the scenario claims.
-- Keep `given([...])` short. Pass factory-built objects, not inline literals.
+- One scenario per `test()`. The title reads as prose.
+- `given_*` is a pre-condition. Seed the state the test needs. Never do setup inside a `when_`.
+- `when_*` is the action under test.
+- `then_*` is the observable outcome. Assert exactly what the title claims.
+- Keep `given([...])` short. Pass factory-built objects (see generators), not inline literals full of irrelevant fields.
+- Tag scenarios that are scoped to a role or capability (e.g. `{ tag: "@user-respondent" }`) so you can slice runs.
+
+## Name verbs by outcome, not by UI mechanics
+
+This is the rule that keeps specs durable. DSL verbs and Driver methods are named for the **observable outcome**, never for how the current UI happens to render it, or that there is a UI at all.
+
+- Prefer **`_is_present` / `_is_absent` / `_is_available` / `_is_not_available`** over `_is_visible`, `_is_shown`, `_is_open`, `_is_displayed`.
+- `then_project_deletion_is_not_available()`, not `then_delete_button_is_hidden()`.
+- `then_previous_assessment_is_present()`, not `then_assessment_panel_is_shown()`.
+
+Two reasons. First, a title that says "is not available" stays true whether the control is hidden, disabled, or absent from the DOM — so a UI redesign doesn't invalidate the spec's meaning. Second, if a `then_` reads persisted state instead of the screen (common when you seed via a real API), an outcome-shaped name still fits; a rendering-shaped name would lie. Reserve "visible/shown/open" for the rare assertion that is genuinely, specifically about rendering.
 
 ## The DSL class
 
-`TestDSL` is a thin orchestration layer that holds a `Driver` reference and exposes domain-named methods. It never contains raw Playwright calls.
+`TestDSL` is a thin orchestration layer that holds a `Driver` and exposes domain-named methods. It never contains raw Playwright — no `Page`, no selectors.
 
 ```typescript
 // tests/dsl/TestDSL.ts
+import { expect } from "@playwright/test";
 import { Driver } from "./Driver";
 
 export class TestDSL {
+  // A little scenario-local context is fine — remembering the "current" entity
+  // between a when_ and a then_ keeps call sites clean. Keep it small.
+  private context: { projectName: string | null } = { projectName: null };
+
   constructor(private readonly driver: Driver) {}
 
   async given_admin_user(user?: UserInfo) {
-    await this.driver.login(user ?? DEFAULT_ADMIN);
+    this.driver.patchState({ user: user ?? DEFAULT_ADMIN });
   }
 
   async given_respondent_user(user?: UserInfo) {
-    await this.driver.login(user ?? DEFAULT_RESPONDENT);
+    this.driver.patchState({ user: user ?? DEFAULT_RESPONDENT });
   }
 
-  async given(items: SeedItem[]) {
-    await this.driver.seed(items);
+  async given(projects: Project[] = [], assessments: Assessment[] = []) {
+    this.driver.patchState({ projects, assessments });
   }
 
   async when_user_creates_project(data: { name: string }) {
-    await this.driver.navigate_to("projects");
-    await this.driver.click_create();
-    await this.driver.fill_field("name", data.name);
-    await this.driver.submit_form();
+    await this.driver.openCreateProject();
+    await this.driver.defineProject(data);
+    await this.driver.saveProject();
   }
 
   async when_user_opens_project(name: string) {
-    await this.driver.navigate_to("projects");
-    await this.driver.click_row_with(name);
+    this.context.projectName = name;
+    await this.driver.navigateToProjects();
+    await this.driver.openProject(name);
   }
 
-  async then_project_is_visible(name: string) {
-    await this.driver.assert_text_visible(name);
+  async then_project_is_present(name: string) {
+    await this.driver.assertProjectPresent(name);
   }
 
-  async then_delete_action_is_not_available() {
-    await this.driver.assert_action_absent("Delete");
+  async then_project_deletion_is_not_available() {
+    await this.driver.assertProjectDeletionUnavailable();
   }
 }
 ```
 
-- Each method covers one domain concept. Split when a method grows past ~5 `driver` calls.
-- `given_` methods call `driver.seed()` or `driver.login()`, nothing else.
-- `when_` methods call `driver.navigate_to()` then one user action. They never call `then_` assertions.
-- `then_` methods call `driver.assert_*`. No navigation, no actions.
-- The DSL has no `Page` reference. Playwright never appears here.
+- Each verb covers one domain concept. If a `when_` grows past a handful of driver calls, it's probably two scenarios.
+- `given_*` verbs seed state (`patchState`, or a real-API seed call — see below). They perform no user actions.
+- `when_*` verbs perform a user action. They never assert.
+- `then_*` verbs assert. Most delegate to a `driver.assert*` method; a few that assert over queried data may call `expect` directly here. They never navigate or act.
+- Keeping a small amount of scenario context on the DSL (the "current" project, a captured value) is fine and often cleaner than threading it through every call.
 
-## The Driver interface
+## The Driver
 
-`Driver` is a TypeScript interface (or abstract class) that defines every operation a spec can perform. It has no implementation, only the contract. Writing this contract first forces you to name things in domain terms before touching the browser.
+`Driver` is the contract between the DSL and the browser. It is a TypeScript interface (or abstract class) with **one method per domain capability** — not a bag of generic UI primitives. You won't find `clickButton` or `fillField` here; you'll find `defineProject`, `openProject`, `assertProjectDeletionUnavailable`. Writing the contract first forces you to name operations in domain terms before you touch a locator.
 
 ```typescript
 // tests/dsl/Driver.ts
-export interface Driver {
-  // lifecycle
-  login(user: UserInfo): Promise<void>;
-  logout(): Promise<void>;
-  cleanup(): Promise<void>;
+import type { Page } from "@playwright/test";
 
-  // state seeding (bypasses the UI for speed)
-  seed(items: SeedItem[]): Promise<void>;
-
-  // navigation
-  navigate_to(section: AppSection): Promise<void>;
-
-  // generic UI primitives (keep these minimal)
-  click_create(): Promise<void>;
-  click_row_with(label: string): Promise<void>;
-  fill_field(field: string, value: string): Promise<void>;
-  submit_form(): Promise<void>;
-
-  // assertions
-  assert_text_visible(text: string): Promise<void>;
-  assert_action_absent(label: string): Promise<void>;
+/** Test state the given_ verbs accumulate. Extend per your domain. */
+export interface State {
+  user?: UserInfo;
+  projects?: Project[];
+  assessments?: Assessment[];
 }
 
-// Shared types
-export type AppSection = "projects" | "dashboard" | "settings";
-export type SeedItem = Project | Survey | Assessment; // your domain types
-export interface UserInfo { email: string; password: string; }
+/**
+ * Driver — the contract every DSL verb calls through.
+ *
+ * There is normally ONE implementation, DriverUI, which drives the browser
+ * with Playwright. Method names describe outcomes, never rendering:
+ * "Available"/"Present"/"Absent", not "Visible"/"Shown"/"Open".
+ */
+export interface Driver {
+  // ── State seeding ──────────────────────────────────────────────
+  /** Merge partial state into the pending seed. Synchronous; accumulates. */
+  patchState(state: Partial<State>): void;
+  /** Apply the accumulated seed and open the app. Idempotent. */
+  ensureInitialized(): Promise<void>;
+  /** Undo anything the test created. Called from the fixture teardown. */
+  cleanup(): Promise<void>;
+
+  // ── Actions ────────────────────────────────────────────────────
+  navigateToProjects(): Promise<void>;
+  openCreateProject(): Promise<void>;
+  defineProject(data: { name: string }): Promise<void>;
+  saveProject(): Promise<void>;
+  openProject(name: string): Promise<void>;
+
+  // ── Assertions (outcome-named) ─────────────────────────────────
+  assertProjectPresent(name: string): Promise<void>;
+  assertProjectDeletionUnavailable(): Promise<void>;
+}
 ```
 
-The interface grows with the app. Every new spec that needs a new operation extends this interface first, then both Driver implementations.
+The interface grows with the app: a new scenario that needs a new operation adds a method here first, then implements it in the Driver. Keeping it an explicit interface (rather than a lone class) documents the whole vocabulary in one file and lets you swap implementations if you ever want to — but you are not required to write more than one.
 
 ## DriverUI — the Playwright implementation
 
-`DriverUI` implements `Driver` using Playwright's `Page`. It is the only file that contains Playwright API calls. Keep each method focused on a single UI operation; delegate repeated patterns to interaction helpers.
+`DriverUI` is the only file that touches the Playwright API. Each method is a single focused UI operation; repeated locator patterns move into interaction helpers.
 
 ```typescript
 // tests/dsl/DriverUI.ts
-import { Page } from "@playwright/test";
-import { Driver, AppSection, SeedItem, UserInfo } from "./Driver";
+import { Page, expect } from "@playwright/test";
+import { Driver, State } from "./Driver";
+import { installMocks } from "./handlers";
 import { navigate } from "./interactions/navigate";
-import { findTableRow } from "./interactions/tableRow";
+import { findRow } from "./interactions/tableRow";
 
 export class DriverUI implements Driver {
+  private seed: Partial<State> = {};
+  private started = false;
+
   constructor(private readonly page: Page) {}
 
-  async login(user: UserInfo) {
-    await this.page.goto("/login");
-    await this.page.getByLabel("Email").fill(user.email);
-    await this.page.getByLabel("Password").fill(user.password);
-    await this.page.getByRole("button", { name: "Sign in" }).click();
-    await this.page.waitForURL("/dashboard");
+  patchState(state: Partial<State>) {
+    this.seed = { ...this.seed, ...state };
   }
 
-  async logout() {
-    await this.page.getByRole("button", { name: "Sign out" }).click();
+  async ensureInitialized() {
+    if (this.started) return;
+    installMocks(this.page, this.seed); // MSW handlers seeded with test state
+    await this.page.goto("/");
+    this.started = true;
   }
 
   async cleanup() {
-    // nothing — MSW resets per test; override in DriverAPI
+    // MSW + a fresh page per test means nothing to undo here.
   }
 
-  async seed(items: SeedItem[]) {
-    // In UI mode: push items into the MSW in-memory store.
-    // Call a test-only window function or use page.evaluate():
-    for (const item of items) {
-      await this.page.evaluate(
-        ([i]) => (window as any).__testSeed?.(i),
-        [item] as const,
-      );
-    }
+  async navigateToProjects() {
+    await this.ensureInitialized();
+    await navigate(this.page, "projects");
   }
 
-  async navigate_to(section: AppSection) {
-    await navigate(this.page, section);
+  async openCreateProject() {
+    await this.ensureInitialized();
+    await this.page.getByTestId("create-project-button").click();
   }
 
-  async click_create() {
-    await this.page.getByRole("button", { name: /create|add/i }).click();
+  async defineProject(data: { name: string }) {
+    await this.page.getByTestId("project-name-input").fill(data.name);
   }
 
-  async click_row_with(label: string) {
-    const row = await findTableRow(this.page, label);
-    await row.click();
+  async saveProject() {
+    await this.page.getByTestId("project-save-button").click();
   }
 
-  async fill_field(field: string, value: string) {
-    await this.page.getByLabel(field, { exact: false }).fill(value);
+  async openProject(name: string) {
+    await (await findRow(this.page, name)).click();
   }
 
-  async submit_form() {
-    await this.page.getByRole("button", { name: /save|submit|confirm/i }).click();
+  async assertProjectPresent(name: string) {
+    await expect(this.page.getByTestId("project-row").filter({ hasText: name })).toBeVisible();
   }
 
-  async assert_text_visible(text: string) {
-    await expect(this.page.getByText(text)).toBeVisible();
-  }
-
-  async assert_action_absent(label: string) {
-    await expect(this.page.getByRole("button", { name: label })).not.toBeVisible();
+  async assertProjectDeletionUnavailable() {
+    await expect(this.page.getByTestId("project-delete-action")).toHaveCount(0);
   }
 }
 ```
 
-## DriverAPI — the HTTP implementation (optional second mode)
+Note the outcome-named assertions call whatever Playwright primitive fits (`toBeVisible`, `toHaveCount(0)`, reading state) — the mechanics stay hidden behind the domain name.
 
-`DriverAPI` implements the same interface but calls the backend directly over HTTP. This mode skips the browser for setup/teardown and can verify the API contract alongside the UI tests.
+## Setting up state: MSW mock or real backend
+
+`given_` verbs need existing data to exist before the browser loads. There are two ways to make that happen. Pick one for your project; the specs don't care which.
+
+### Option A — Mock the backend with MSW (fast, isolated)
+
+Intercept the app's HTTP calls with [MSW](https://mswjs.io/) and serve them from an in-memory store seeded from `patchState`. No backend runs; tests are fast and hermetic.
 
 ```typescript
-// tests/dsl/DriverAPI.ts
-import { request, APIRequestContext } from "@playwright/test";
-import { Driver, AppSection, SeedItem, UserInfo } from "./Driver";
+// tests/dsl/handlers.ts
+import { http, HttpResponse } from "msw";
+import type { Page } from "@playwright/test";
+import type { State } from "./Driver";
 
-export class DriverAPI implements Driver {
-  private ctx!: APIRequestContext;
+// Build request handlers over a mutable store seeded from test state.
+export function installMocks(page: Page, seed: Partial<State>) {
+  const store = { projects: seed.projects ?? [], user: seed.user };
 
-  constructor(private readonly baseURL: string) {}
+  const handlers = [
+    http.get("/api/projects", () => HttpResponse.json(store.projects)),
+    http.post("/api/projects", async ({ request }) => {
+      const body = (await request.json()) as { name: string };
+      const created = { id: crypto.randomUUID(), ...body };
+      store.projects.push(created);
+      return HttpResponse.json(created, { status: 201 });
+    }),
+    http.get("/api/me", () => HttpResponse.json(store.user ?? null)),
+    // …one handler per endpoint the flow touches
+  ];
 
-  async login(user: UserInfo) {
-    this.ctx = await request.newContext({ baseURL: this.baseURL });
-    await this.ctx.post("/api/auth/login", { data: user });
-  }
-
-  async cleanup() {
-    await this.ctx.delete("/api/test/state");
-    await this.ctx.dispose();
-  }
-
-  async seed(items: SeedItem[]) {
-    await this.ctx.post("/api/test/seed", { data: { items } });
-  }
-
-  async navigate_to(_section: AppSection) {
-    // No-op — no browser in API mode
-  }
-
-  // ...rest mirrors the interface; each method calls a real endpoint
+  // Wire handlers into the page. With @msw/playwright this is a network
+  // fixture; in a plain setup, inject the worker in your app's test entry.
+  return handlers;
 }
 ```
 
-The API driver requires a test-only seed endpoint on the server (protected, only active when `TEST_MODE=true`). If you don't have one, start with DriverUI only.
+With MSW, `given_` verbs are pure `patchState` calls (synchronous, no network), and `ensureInitialized()` installs the seeded handlers before the first navigation.
+
+### Option B — Seed a real backend over its API (higher fidelity)
+
+Point the app at a running backend and set up state by calling that backend's API in the `given_` verbs. Slower, needs a disposable/test database, but exercises the real server and real persistence.
+
+```typescript
+// tests/dsl/DriverUI.ts (real-backend seeding variant)
+async ensureInitialized() {
+  if (this.started) return;
+  // Create seeded entities via the real API before the browser loads them.
+  if (this.seed.user) await this.api.post("/api/test/login", this.seed.user);
+  for (const p of this.seed.projects ?? []) await this.api.post("/api/projects", p);
+  await this.page.goto("/");
+  this.started = true;
+}
+
+async cleanup() {
+  // Delete what this test created, so runs don't leak into each other.
+  await this.api.delete("/api/test/state");
+}
+```
+
+This usually needs a test-only affordance on the server: a seed/reset endpoint, or a login shortcut, active only when a `TEST_MODE` flag is set. A plain `fetch` wrapper is enough for the client — you don't need Playwright's `APIRequestContext`. `cleanup()` matters here (it's a no-op under MSW).
+
+### Keeping both
+
+If you want the same suite to run both ways, put just the seeding behind a small seam (`patchState` / `ensureInitialized` / `cleanup`) with an MSW implementation and an API implementation, and select via an env var in the fixture. The browser-driving methods stay in one place — you are not writing the whole Driver twice.
 
 ## Interaction helpers
 
-Interaction helpers are plain functions (not classes) that encapsulate reusable UI patterns. They take `Page` and return a value or perform an action. Collect them in `tests/dsl/interactions/`.
+Interaction helpers are plain functions (not classes) that wrap reusable UI patterns. They take `Page`, do one thing, and return a `Locator` when the caller needs to assert or `void` when they're a pure action. Collect them under `tests/dsl/interactions/`.
 
 ```typescript
 // tests/dsl/interactions/navigate.ts
 import { Page } from "@playwright/test";
-import { AppSection } from "../Driver";
 
-const SECTION_URL: Record<AppSection, string> = {
+export type Section = "projects" | "dashboard" | "settings";
+
+const SECTION_URL: Record<Section, string> = {
   projects: "/projects",
   dashboard: "/dashboard",
   settings: "/settings",
 };
 
-export async function navigate(page: Page, section: AppSection) {
+export async function navigate(page: Page, section: Section) {
   await page.goto(SECTION_URL[section]);
   await page.waitForLoadState("networkidle");
 }
@@ -281,138 +328,132 @@ export async function navigate(page: Page, section: AppSection) {
 
 ```typescript
 // tests/dsl/interactions/tableRow.ts
-import { Page, Locator } from "@playwright/test";
+import { Page, Locator, expect } from "@playwright/test";
 
-export async function findTableRow(page: Page, text: string): Promise<Locator> {
-  const row = page.locator("tr", { hasText: text });
+export async function findRow(page: Page, text: string): Promise<Locator> {
+  const row = page.getByTestId("table-row").filter({ hasText: text });
   await expect(row).toBeVisible();
   return row;
 }
 ```
 
-```typescript
-// tests/dsl/interactions/combobox.ts
-import { Page } from "@playwright/test";
+- One file per UI pattern (row, combobox, dialog, date picker). Multi-step domain flows (e.g. "complete the whole survey") can live here too, as their own file.
+- Keep each function tight and single-purpose; a few will legitimately be longer when the flow is.
 
-// Combobox pattern — type to search, click to select
-export async function selectCombobox(page: Page, label: string, value: string) {
-  await page.getByLabel(label).click();
-  await page.getByPlaceholder("Search…").fill(value);
-  await page.getByRole("option", { name: value }).click();
-}
-```
+## Selectors: `data-testid` first
 
-- One file per UI component pattern (combobox, dialog, table row, date picker).
-- Each function does one thing and stays under ~15 lines.
-- Use `data-testid` attributes.
-- Return `Locator` when the caller needs to assert; return `void` when the function is a pure action.
+`data-testid` is the default selector strategy — it's stable across copy changes and restyling, and it makes the Driver read cleanly.
+
+- **Default:** `page.getByTestId("project-save-button")`, optionally narrowed with `.filter({ hasText })` or `.nth()`.
+- **Use `getByRole` / `getByText`** when you're deliberately asserting user-facing semantics (accessibility roles, actual visible copy) and a testid would hide what you mean to check.
+- **Never** couple to CSS classes or DOM structure — those change for reasons unrelated to behaviour.
+
+Add the `data-testid` attributes to the app as you write the tests; treat them as a first-class part of the component contract.
 
 ## Test data generators
 
-Generators are factory functions that return domain objects with sensible defaults. Tests pass only the fields that matter to the scenario and leave the rest to the factory.
+Generators are factory functions returning domain objects with sensible defaults. A test passes only the fields the scenario asserts on and lets the factory fill the rest.
 
 ```typescript
 // tests/generators.ts
-import { v4 as uuid } from "uuid";
+const id = () => "id-" + Math.random().toString(36).slice(2, 11);
 
 export function project(overrides: Partial<Project> = {}): Project {
   return {
-    id: uuid(),
+    id: id(),
     name: "Test Project",
     status: "active",
-    createdAt: "2024-01-01T00:00:00Z",
+    createdAt: new Date().toISOString(),
     ...overrides,
   };
 }
 
 export function assessment(overrides: Partial<Assessment> = {}): Assessment {
   return {
-    id: uuid(),
+    id: id(),
     projectId: "",
-    score: 80,
-    riskLevel: "low",
+    risk: "low",
+    status: "approved", // default to the common case; override for drafts
     ...overrides,
   };
 }
 ```
 
-Usage in tests: always pass the fields the scenario asserts on; let the rest be defaults.
-
 ```typescript
 await dsl.given([
-  project({ id: "proj-1", name: "Alpha" }),   // name matters: we assert it's visible
-  project({ id: "proj-2", name: "Beta" }),    // second project to test filtering
+  project({ id: "proj-1", name: "Alpha" }), // name matters: we assert it's present
+  project({ id: "proj-2", name: "Beta" }),  // second project to test filtering
 ]);
 ```
 
+Give defaults real-world shape (a published assessment, an active project) so the common case needs no overrides and the overrides that appear signal what the scenario is actually about.
+
 ## Fixture setup — wiring the DSL
 
-Use Playwright fixtures to create the DSL and inject it into every test.
+A Playwright fixture builds the DSL and injects it. `createDSL` returns a factory so each `beforeEach` gets a fresh instance, and teardown runs `cleanup()`.
 
 ```typescript
 // tests/specs/playwright.setup.ts
 import { test as base, expect } from "@playwright/test";
 import { TestDSL } from "../dsl/TestDSL";
 import { DriverUI } from "../dsl/DriverUI";
-import { DriverAPI } from "../dsl/DriverAPI";
-import { Driver } from "../dsl/Driver";
+import type { Driver } from "../dsl/Driver";
 
 type Fixtures = { createDSL: () => TestDSL };
 
 export const test = base.extend<Fixtures>({
   createDSL: async ({ page }, use) => {
-    const mode = process.env.TEST_MODE ?? "ui";
-    let driver: Driver;
+    const drivers: Driver[] = [];
 
-    if (mode === "api") {
-      driver = new DriverAPI(process.env.API_BASE_URL ?? "http://localhost:8000");
-    } else {
-      driver = new DriverUI(page);
-    }
+    await use(() => {
+      const driver = new DriverUI(page);
+      drivers.push(driver);
+      return new TestDSL(driver);
+    });
 
-    await use(() => new TestDSL(driver));
-
-    await driver.cleanup();
+    for (const driver of drivers) await driver.cleanup();
   },
 });
 
 export { expect };
 ```
 
+If you support both seeding modes, select the seeder here from an env var (e.g. `TEST_BACKEND=msw|api`) and inject it into `DriverUI`.
+
 ## File layout
 
 ```text
 tests/
   specs/
-    playwright.setup.ts     ← custom fixtures, driver selection
+    playwright.setup.ts     ← fixtures; seeding-mode selection if any
     *.spec.ts               ← one file per feature area
   dsl/
-    Driver.ts               ← interface (the contract)
-    DriverUI.ts             ← Playwright implementation
-    DriverAPI.ts            ← HTTP implementation (optional)
-    TestDSL.ts              ← domain-named given/when/then methods
+    Driver.ts               ← the contract + State type
+    DriverUI.ts             ← the Playwright implementation
+    handlers.ts             ← MSW request handlers (MSW mode only)
+    TestDSL.ts              ← given_ / when_ / then_ verbs
     interactions/
       navigate.ts
       tableRow.ts
-      combobox.ts
-      dialog.ts
-      …                     ← one file per UI component pattern
+      …                     ← one file per UI pattern
   generators.ts             ← test data factories
 playwright.config.ts        ← timeouts, base URL, web server
 ```
 
+## Refactoring an existing Playwright suite into this shape
+
+You don't have to rewrite everything at once:
+
+1. Add `playwright.setup.ts`, an empty `Driver` interface, and a `DriverUI` skeleton.
+2. Take one existing test. Rewrite its title in business language and express its body as `given_` / `when_` / `then_` calls.
+3. Move each raw Playwright line into a domain-named Driver method as you go — the interface grows one method per real need.
+4. Pull recurring locator patterns into `interactions/` the second time you copy one.
+5. Repeat per test. The old and new styles can coexist during the migration.
+
 ## Bootstrapping from scratch
 
-If the project has no test setup:
-
-1. **Install dependencies**:
-
-   ```bash
-   npm install -D @playwright/test
-   npx playwright install chromium
-   ```
-
-2. **`playwright.config.ts`** — minimal starting point:
+1. Install: `npm install -D @playwright/test` then `npx playwright install chromium`. Add MSW (`npm install -D msw`) if you're mocking.
+2. Minimal `playwright.config.ts`:
 
    ```typescript
    import { defineConfig } from "@playwright/test";
@@ -423,20 +464,18 @@ If the project has no test setup:
    });
    ```
 
-3. **Create the skeleton** in order: `Driver.ts` (empty interface), `DriverUI.ts` (empty class), `TestDSL.ts` (empty class), `playwright.setup.ts` (wiring), `generators.ts` (first factory).
-
-4. **Write the first failing spec** for one happy-path scenario. Implement only the Driver and DSL methods it needs. Run it red, then implement the feature green.
-
-5. **Add interaction helpers** the moment you copy the same Playwright locator pattern a second time.
-
-6. **Add `DriverAPI`** only when you have a real backend and want integration coverage. Start with DriverUI only.
+3. Create the skeleton in order: `Driver.ts` (interface), `DriverUI.ts` (class), `TestDSL.ts`, `playwright.setup.ts`, `generators.ts`.
+4. Write the first failing spec for one happy path. Implement only the Driver and DSL methods it needs, run it red, then make it green.
+5. Choose your seeding mode: MSW to start (fastest), and add real-API seeding later behind the same `patchState`/`ensureInitialized` seam if you want server-level fidelity.
 
 ## Review checklist
 
-A reviewer should be able to read one `.spec.ts` file and understand every user scenario the feature covers, without knowing Playwright, the component library, or how the API works. If they need to open `DriverUI.ts` to understand what a test asserts, the DSL method name is too low-level.
+A reviewer should read one `.spec.ts` and understand every scenario the feature covers without knowing Playwright, the component library, or the API. If they must open `DriverUI.ts` to learn what a test asserts, the DSL verb is too low-level.
 
-- [ ] Test name reads as a user story ("Scenario: Admin…")
-- [ ] `given_`, `when_`, `then_` separation is clean: no action inside `given_`, no setup inside `when_`
-- [ ] Generators are used for seed data; no inline object literals with irrelevant fields
-- [ ] Every interaction with the page goes through DriverUI, not the spec directly
-- [ ] Selectors use `data-testid` first, `getByRole` / `getByLabel` second, CSS never
+- [ ] Title reads as product behaviour, in business language, with no page/button/dialog and no `"Scenario:"` prefix.
+- [ ] `given_` / `when_` / `then_` separation is clean: no action in `given_`, no setup in `when_`, no assertion in `when_`.
+- [ ] Verb and Driver-method names describe outcomes (`Available` / `Present` / `Absent`), not rendering (`Visible` / `Shown` / `Open`).
+- [ ] Driver methods are domain operations, not generic UI primitives leaking into the DSL.
+- [ ] Generators supply seed data; no inline literals stuffed with irrelevant fields.
+- [ ] Every interaction with the page goes through the Driver, never the spec.
+- [ ] Selectors use `data-testid` by default; `getByRole` / `getByText` only for genuine semantic/copy assertions; never CSS.
