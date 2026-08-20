@@ -1,5 +1,11 @@
 # jakubsob-skills
 
+## 1.1.1
+
+### Patch Changes
+
+- [`ac439f5`](https://github.com/jakubsob/skills/commit/ac439f56ad6549f53307b0ada815d8a4bc2397a7) Thanks [@jakubsob](https://github.com/jakubsob)! - Route the testing skill to the Playwright and R package references. 1.1.0 shipped both reference files but `SKILL.md` only listed FastAPI in its routing table, so the skill never directed Claude to read them. Add routing-table rows and description hints for the Playwright acceptance-testing and R (`testthat`) references.
+
 ## 1.1.0
 
 ### Minor Changes
