@@ -5,7 +5,9 @@ description: >-
   development (TDD). Use when adding tests, asked to "test" a feature/endpoint/module,
   reproducing a bug with a test, or reviewing test quality. This is the central entry
   point for any testing in the repo; it routes to framework-specific guidance. Say
-  "FastAPI testing" (or work on an API route / endpoint) to load the FastAPI conventions.
+  "FastAPI testing" (or work on an API route / endpoint) to load the FastAPI conventions,
+  "Playwright" or "acceptance / e2e tests" for the browser acceptance-testing conventions,
+  or "R package testing" (testthat) for the R conventions.
 ---
 
 # Testing
@@ -15,13 +17,18 @@ you're testing.
 
 ## Routing: load the right reference
 
-| If the task involves…                                 | Read                                                |
-| ----------------------------------------------------- | --------------------------------------------------- |
-| FastAPI endpoints, API routes, the backend test suite | [references/fastapi.md](references/fastapi.md)      |
+| If the task involves…                                        | Read                                                                       |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------- |
+| FastAPI endpoints, API routes, the backend test suite        | [references/fastapi.md](references/fastapi.md)                             |
+| End-to-end / acceptance tests, Playwright, browser or UI specs | [references/playwright-acceptance.md](references/playwright-acceptance.md) |
+| R packages, `testthat`, R unit/acceptance/mutation tests     | [references/r-packages.md](references/r-packages.md)                       |
 
-When the user says "FastAPI testing", **read `references/fastapi.md` before
-writing tests.** It has the fixtures, file layout, and copy-paste templates
-this repo uses.
+When a task matches a row, **read that reference before writing tests** — each one
+carries the fixtures, file layout, and copy-paste templates for its stack:
+
+- "FastAPI testing", or working on an API route/endpoint → `references/fastapi.md`.
+- "Playwright", "acceptance tests", "e2e", browser/UI specs → `references/playwright-acceptance.md`.
+- "R package testing", `testthat`, an R package → `references/r-packages.md`.
 
 If no reference matches (a framework not yet covered, or a brand-new project with
 no existing tests), apply the general principles below and produce tests in that
