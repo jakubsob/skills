@@ -22,6 +22,7 @@ you're testing.
 | FastAPI endpoints, API routes, the backend test suite        | [references/fastapi.md](references/fastapi.md)                             |
 | End-to-end / acceptance tests, Playwright, browser or UI specs | [references/playwright-acceptance.md](references/playwright-acceptance.md) |
 | R packages, `testthat`, R unit/acceptance/mutation tests     | [references/r-packages.md](references/r-packages.md)                       |
+| BDD / Gherkin scenarios, Given-When-Then, `.feature` files, executable specs | [references/bdd-scenarios.md](references/bdd-scenarios.md) |
 
 When a task matches a row, **read that reference before writing tests** — each one
 carries the fixtures, file layout, and copy-paste templates for its stack:
@@ -29,6 +30,7 @@ carries the fixtures, file layout, and copy-paste templates for its stack:
 - "FastAPI testing", or working on an API route/endpoint → `references/fastapi.md`.
 - "Playwright", "acceptance tests", "e2e", browser/UI specs → `references/playwright-acceptance.md`.
 - "R package testing", `testthat`, an R package → `references/r-packages.md`.
+- "BDD", "Gherkin", "Given-When-Then", writing or reviewing `.feature` scenarios / executable specs → `references/bdd-scenarios.md`.
 
 If no reference matches (a framework not yet covered, or a brand-new project with
 no existing tests), apply the general principles below and produce tests in that
