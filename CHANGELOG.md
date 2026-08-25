@@ -1,5 +1,11 @@
 # jakubsob-skills
 
+## 1.2.0
+
+### Minor Changes
+
+- [`17e7cc3`](https://github.com/jakubsob/skills/commit/17e7cc3a2ff6df102dc87dc6d5731f117f066024) Thanks [@jakubsob](https://github.com/jakubsob)! - Add a BDD scenario-writing reference to the testing skill. A guide to writing and reviewing Given-When-Then / Gherkin scenarios distilled from Gojko Adzic's _Given-When-Then With Style_ series: the two golden rules (describe _what_ not _how_, and don't program in Gherkin), Given/When/Then structure by tense and voice, purpose-driven scenario titles, boundary-focused example selection, when to reach for Scenario Outlines vs Background vs hooks, declarative state setup (factories/finders/"describe what exists"), keeping scenarios independent, handling the awkward cases (waits, relative dates, randomness, negative capability, complex workflows), readability, UI and API scenarios, BDD-vs-unit-tests, and a review checklist. Wired into `SKILL.md` with a routing-table row and description hints so BDD, Gherkin, and `.feature` work loads it.
+
 ## 1.1.1
 
 ### Patch Changes
